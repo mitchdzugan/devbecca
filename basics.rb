@@ -1,11 +1,14 @@
-require "pry"
+require "pry-byebug"
 
-binding.pry
+def mything
 
-a = 1
+  binding.pry
 
-def myf(b)
-  b + 2
+  a = 1
+  b = 2
+
+  puts([a, b])
+
 end
 
-puts(myf(a))
+mything()
