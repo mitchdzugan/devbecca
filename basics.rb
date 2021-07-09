@@ -1,14 +1,16 @@
 require "pry-byebug"
 
-def mything
+binding.pry
 
-  binding.pry
+a = 1
+b = 2
 
-  a = 1
-  b = 2
-
-  puts([a, b])
-
+def g(c)
+  d = c + 1
+  e = c + 2
+  d + e
 end
 
-mything()
+f = g(a)
+
+puts([a, b, f])
