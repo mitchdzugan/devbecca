@@ -1,2 +1,7 @@
 source 'https://rubygems.org'
+gem 'byebug'
+gem 'pry'
+gem 'pry-byebug'
+gem 'pry-nav'
+gem 'pry-remote'
 gem 'rack'
