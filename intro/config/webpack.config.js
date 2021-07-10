@@ -407,8 +407,15 @@ module.exports = function (webpackEnv) {
                     },
                   ],
                 ],
-                
-                plugins: [
+                  plugins: [
+                      [
+                          require.resolve("babel-plugin-inline-import"), 
+                          {
+                              "extensions": [
+                                  ".rb"
+                              ]
+                          }
+                      ],
                   [
                     require.resolve('babel-plugin-named-asset-import'),
                     {

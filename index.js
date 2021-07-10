@@ -1,5 +1,6 @@
 const express = require('express');
 const app = express();
+const cors = require('cors');
 const port = process.env.PORT || 5000;
 const { spawn } = require("child_process");
 const fs = require('fs');
@@ -61,7 +62,16 @@ app.get('/intro', (req, res) => {
     res.setHeader('Content-Type', 'text/html');
     res.end(html);
 });
-app.get('/step', (req, res) => {
+
+app.listen(port, () => {
+  console.log(`Example app listening at http://localhost:${port}`);
+});
+
+app.use('/static/js', express.static('intro/build/static/js'));
+app.use('/static/css', express.static('intro/build/static/css'));
+
+
+const STEP = (res) => {
     if (!CURR) {
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ error: "NOT STARTED" }));
@@ -78,7 +88,9 @@ app.get('/step', (req, res) => {
             res.end(JSON.stringify({ ...result, stdin }));
         });
     });
-});
+};
+
+app.get('/step', (req, res) => STEP(res));
 app.get('/start', (req, res) => {
 	  const proc = spawn("ruby", ["./basics.rb"]);
     let started = false;
@@ -88,7 +100,7 @@ app.get('/start', (req, res) => {
     let json = false;
     let step = false;
     let stdin = "";
-    const fullVars = {};
+    let fullVars = {};
     let resolve;
     CURR = {
         step: () => {
@@ -98,6 +110,7 @@ app.get('/start', (req, res) => {
             return p;
         },
         getStats: () => {
+            fullVars = {};
             const p = new Promise((r => { resolve = r; }));
             localVars = true;
             proc.stdin.write("local_variables\n");
@@ -115,13 +128,24 @@ app.get('/start', (req, res) => {
             stdin = "";
             return;
         }
-        if (step && ins !== "step\n") {
+        if (step && !ins.endsWith("step\n")) {
             stdin += ins;
         }
         if (backtrace && ins.startsWith("--> ")) {
             const stack = ins
                   .trim().split("\n")
-                  .map(s => parseInt(s.trim().reverse().split(":")[0].reverse()) - 5);
+                  .map(s => {
+                      const parts = s.substr(4).trim().split(" ");
+                      const linenum = parseInt(parts[4].reverse().split(":")[0].reverse()) - 5;
+                      const name = parts[2];
+                      let fname;
+                      if (name === "<main>") {
+                          fname = "";
+                      } else {
+                          fname = name.substr(7, name.indexOf("(") - 7);
+                      }
+                      return { fname, linenum };
+                  });
             backtrace = false;
             resolve({ stack, vars: fullVars });
             return;
@@ -157,10 +181,7 @@ app.get('/start', (req, res) => {
         }
         if (required && ins.startsWith("=> ")) {
             required = false;
-            CURR.getStats().then(result => {
-                res.setHeader('Content-Type', 'application/json');
-                res.end(JSON.stringify(result));
-            });
+            STEP(res);
             return;
         }
         if (!started && ins.trim() === '[1] pry(main)>') {
@@ -175,10 +196,3 @@ app.get('/start', (req, res) => {
         CURR = undefined;
     });
 });
-
-app.listen(port, () => {
-  console.log(`Example app listening at http://localhost:${port}`);
-});
-
-app.use('/static/js', express.static('intro/build/static/js'));
-app.use('/static/css', express.static('intro/build/static/css'));
