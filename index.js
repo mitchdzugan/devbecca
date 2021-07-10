@@ -2,6 +2,7 @@ const express = require('express');
 const app = express();
 const port = process.env.PORT || 5000;
 const { spawn } = require("child_process");
+const fs = require('fs');
 
 app.get('/', (req, res) => {
   res.send('Hello World!');
@@ -22,6 +23,44 @@ const IGNORE = {
     "_out_": true,
     "_in_": true,
 };
+app.get('/intro', (req, res) => {
+    const css = fs.readdirSync("./intro/build/static/css")
+          .filter(f => f.endsWith("css"))
+          .map(f => `/static/css/${f}`)
+          .map(css => `<link rel="stylesheet" href="${css}">`)
+          .join("\n");
+    const js = fs.readdirSync("./intro/build/static/js")
+          .filter(f => f.endsWith("js"))
+          .map(f => `/static/js/${f}`)
+          .map(js => `<script src="${js}"></script>`)
+          .join("\n");
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta
+      name="description"
+      content="Web site created using create-react-app"
+    />
+    <link rel="apple-touch-icon" href="/logo192.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <title>Intro</title>
+    ${css}
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+    ${js}
+  </body>
+</html>
+`;
+    res.setHeader('Content-Type', 'text/html');
+    res.end(html);
+});
 app.get('/step', (req, res) => {
     if (!CURR) {
         res.setHeader('Content-Type', 'application/json');
@@ -141,3 +180,5 @@ app.listen(port, () => {
   console.log(`Example app listening at http://localhost:${port}`);
 });
 
+app.use('/static/js', express.static('intro/build/static/js'));
+app.use('/static/css', express.static('intro/build/static/css'));
