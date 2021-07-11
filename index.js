@@ -25,6 +25,7 @@ const IGNORE = {
     "_in_": true,
 };
 app.get('/intro', (req, res) => {
+    const p = new Promise(resolve => CURR ? CURR.getStats().then(v => resolve(v)) : resolve({ stopped: true }));
     const css = fs.readdirSync("./intro/build/static/css")
           .filter(f => f.endsWith("css"))
           .map(f => `/static/css/${f}`)
@@ -35,7 +36,8 @@ app.get('/intro', (req, res) => {
           .map(f => `/static/js/${f}`)
           .map(js => `<script src="${js}"></script>`)
           .join("\n");
-    const html = `
+    p.then((serverData) => {
+        const html = `
 <!DOCTYPE html>
 <html lang="en">
   <head>
@@ -55,12 +57,14 @@ app.get('/intro', (req, res) => {
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root"></div>
+    <script>window.serverData = ${JSON.stringify(serverData)}</script>
     ${js}
   </body>
 </html>
 `;
-    res.setHeader('Content-Type', 'text/html');
-    res.end(html);
+        res.setHeader('Content-Type', 'text/html');
+        res.end(html);
+    });
 });
 
 app.listen(port, () => {
@@ -90,8 +94,7 @@ const STEP = (res) => {
     });
 };
 
-app.get('/step', (req, res) => STEP(res));
-app.get('/start', (req, res) => {
+const START = (res, steps = 1) => {
 	  const proc = spawn("ruby", ["./basics.rb"]);
     let started = false;
     let required = false;
@@ -103,11 +106,16 @@ app.get('/start', (req, res) => {
     let fullVars = {};
     let resolve;
     CURR = {
+        steps: 0,
         step: () => {
             const p = new Promise((r => { resolve = r; }));
             step = true;
             proc.stdin.write("step\n");
-            return p;
+            return p.then(r => {
+                if (!CURR) { return r; }
+                CURR.steps += 1;
+                return r;
+            });
         },
         getStats: () => {
             fullVars = {};
@@ -181,7 +189,22 @@ app.get('/start', (req, res) => {
         }
         if (required && ins.startsWith("=> ")) {
             required = false;
-            STEP(res);
+            stdin = "";
+            const loop = (count, done) => {
+                if (!count) {
+                    return done();
+                }
+                if (!CURR) {
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ vars: {}, done: true, stdin }));
+                    return {};
+                }
+                return CURR.step().then(res => {
+                    stdin += res.stdin;
+                    loop(count - 1, done);
+                });
+            };
+            loop(steps - 1, () => STEP(res));
             return;
         }
         if (!started && ins.trim() === '[1] pry(main)>') {
@@ -195,4 +218,21 @@ app.get('/start', (req, res) => {
         resolve({ stdin, done: true });
         CURR = undefined;
     });
+};
+
+app.get('/reset', (req, res) => {
+    CURR = undefined;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ success: true }));
+});
+app.get('/step', (req, res) => STEP(res));
+app.get('/start', (req, res) => {
+    if (CURR) { return STEP(res); }
+    return START(res);
+});
+app.get('/rewind', (req, res) => {
+    if (CURR) { return START(res, CURR.steps - 1); }
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ error: "NOT STARTED" }));
+    return {};
 });

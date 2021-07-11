@@ -177,3 +177,7 @@ tr:last-child td:first-child:before {
 italic {
     font-style: italic;
 }
+
+textarea {
+    margin-left: 1.2rem;
+}

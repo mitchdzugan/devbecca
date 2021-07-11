@@ -11,22 +11,33 @@ import _basics from "../../basics.rb";
 const basics = _basics.split("\n").slice(4).join("\n");
 const ls = basics.split("\n");
 
+const serverData = window.serverData;
 let stepping = false;
 function App() {
-    const [started, setStarted] = React.useState(false);
-    const [vars, setVars] = React.useState({});
-    const [_stack, setStack] = React.useState([{ linenum: 0, fname: "" }]);
+    const [started, setStarted] = React.useState(!serverData.stopped);
+    const [fullStarted, setFullStarted] = React.useState(started);
+    const [vars, setVars] = React.useState(serverData.vars || {});
+    const [_stack, setStack] = React.useState(serverData.stack || [{ linenum: 0, fname: "" }]);
     const [_stdin, setStdin] = React.useState("");
     const stack = _stack.map((el) => {
         let linenum = el.linenum + 1;
         while (linenum < 100 && (ls[linenum - 1] || "").length < 1) {
             linenum++;
         }
-        console.log(linenum, el.linenum);
         return { linenum, fname: el.fname };
     });
     const { linenum } = stack[0];
-    const reset = () => {};
+    const reset = (e) => {
+        e.preventDefault();
+        if (!started) { return; }
+        fetch('/reset').then(() => {
+            setStarted(false);
+            setFullStarted(false);
+            setVars({});
+            setStack([{ linenum: 0, fname: "" }]);
+            setStdin("");
+        });
+    };
     const step = (e) => {
         e.preventDefault();
         if (stepping) { return; }
@@ -40,6 +51,7 @@ function App() {
             .then(response => response.json())
             .then(({ stack, vars, stdin, done }) => {
                 setStdin((!started ? "" : _stdin) + (stdin || ""));
+                setFullStarted(true);
                 if (!done) {
                     setVars(vars);
                     setStack(stack);
@@ -47,6 +59,30 @@ function App() {
                 if (done) {
                     setStack([{ linenum: 0, fname: "" }]);
                     setStarted(false);
+                    setFullStarted(false);
+                }
+                stepping = false;
+            });
+    };
+    const rewind = (e) => {
+        e.preventDefault();
+        if (!started) { return; }
+        if (stepping) { return; }
+        stepping = true;
+        setStarted(true);
+        fetch('/rewind')
+            .then(response => response.json())
+            .then(({ stack, vars, stdin, done }) => {
+                setStdin(stdin || "");
+                setFullStarted(true);
+                if (!done) {
+                    setVars(vars);
+                    setStack(stack);
+                }
+                if (done) {
+                    setStack([{ linenum: 0, fname: "" }]);
+                    setStarted(false);
+                    setFullStarted(false);
                 }
                 stepping = false;
             });
@@ -66,7 +102,11 @@ function App() {
                   <div className="spacer" />
                   <div className="spacer" />
                   <div className="spacer" />
+                  <div className="spacer" />
+                  <div className="spacer" />
                   <a onClick={reset} href={started ? "" : null}>Reset</a>
+                  <div className="spacer" />
+                  <a onClick={rewind} href={started ? "" : null}>Rewind</a>
                   <div className="spacer" />
                   <a onClick={step} href={""}>Step</a>
                   <div className="spacer" />
@@ -113,7 +153,7 @@ function App() {
                   <button style={{ visibility: "hidden" }} >i</button>
                 </div>
                 <div className="ta ta2">
-                  {!started ? <div/> : (
+                  {!fullStarted ? <div/> : (
                       <table style={{ margin: "auto" }} className="table">
                         <tr>
                           <th>Function</th>
@@ -130,12 +170,12 @@ function App() {
                 <div className="spacer" />
                 <button style={{ visibility: "hidden" }} >i</button>
               </div>
-              <div className="ta ta2">
-                <div>
-                  {stdin}
+                <div className="ta ta2">
+                  <pre style={{ marginLeft: "1rem" }} >
+                    {stdin}
+                  </pre>
                 </div>
               </div>
-            </div>
             </div>
           </div>
         </div>
