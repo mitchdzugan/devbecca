@@ -11,7 +11,7 @@ end
 
 def is_palindrome(s)
   # TODO write the body of this function
-  return ""
+  return false
 end
 
 def merge_arrays(a1, a2)
