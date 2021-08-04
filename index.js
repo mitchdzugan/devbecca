@@ -1,9 +1,27 @@
 const express = require('express');
 const app = express();
 const cors = require('cors');
-const port = process.env.PORT || 5000;
+const port = process.env.PORT || 8000;
 const { spawn } = require("child_process");
 const fs = require('fs');
+const http = require('http');
+const server = http.createServer(app);
+const { Server } = require("socket.io");
+const io = new Server(server);
+
+const clients = {};
+let nextId = 1;
+
+io.on('connection', (socket) => {
+    const id = nextId;
+    nextId++;
+    clients[id] = socket;
+    socket.emit("ID", JSON.stringify({ id }));
+    socket.on('disconnect', () => { delete clients[id]; });
+});
+
+const isPrompt = s => s.startsWith("[") && s.endsWith("> ");
+const isTrimPrompt = s => s.startsWith("[") && s.endsWith(">");
 
 app.get('/', (req, res) => {
   res.send('Hello World!');
@@ -57,7 +75,7 @@ app.get('/intro', (req, res) => {
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root"></div>
-    <script>window.serverData = ${JSON.stringify(serverData)}</script>
+    <script>window.serverData = ${JSON.stringify({ ...serverData, codeId: CURR ? CURR.codeId : "basics" })}</script>
     ${js}
   </body>
 </html>
@@ -67,7 +85,7 @@ app.get('/intro', (req, res) => {
     });
 });
 
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`Example app listening at http://localhost:${port}`);
 });
 
@@ -75,7 +93,8 @@ app.use('/static/js', express.static('intro/build/static/js'));
 app.use('/static/css', express.static('intro/build/static/css'));
 
 
-const STEP = (res) => {
+const STEP = (req, res) => {
+    console.log(req.query);
     if (!CURR) {
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ error: "NOT STARTED" }));
@@ -85,17 +104,33 @@ const STEP = (res) => {
         if (done) {
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify({ done: true, stdin }));
+            Object.keys(clients).forEach(clientId => {
+                if (`${clientId}` === req.query.id) {
+                    return;
+                }
+                const client = clients[clientId];
+                client.emit('DATA', JSON.stringify({ done: true, stdin, codeId: CURR.codeId }));
+            });
             return;
         }
         CURR.getStats().then(result => {
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify({ ...result, stdin }));
+            Object.keys(clients).forEach(clientId => {
+                if (`${clientId}` === req.query.id) {
+                    return;
+                }
+                const client = clients[clientId];
+                client.emit('DATA', JSON.stringify({ ...result, stdin, codeId: CURR.codeId }));
+            });
         });
     });
 };
 
-const START = (res, steps = 1) => {
-	  const proc = spawn("ruby", ["./basics.rb"]);
+const START = (req, res, steps = 1, rawCodeId = "basics") => {
+    const codeId = req.query.code || rawCodeId;
+	  const proc = spawn("ruby", [`./${codeId}.rb`]);
+    let sofar = "";
     let started = false;
     let required = false;
     let localVars = false;
@@ -106,6 +141,7 @@ const START = (res, steps = 1) => {
     let fullVars = {};
     let resolve;
     CURR = {
+        codeId,
         steps: 0,
         step: () => {
             const p = new Promise((r => { resolve = r; }));
@@ -130,21 +166,41 @@ const START = (res, steps = 1) => {
             /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
             ''
         );
+    });
+    const PROC = (ins) => {
+        // console.log({ ins, step, started, required, localVars, backtrace, json, step, stdin, fullVars });
         if (step && ins.endsWith("> ")) {
             step = false;
             resolve({ stdin, done: false });
             stdin = "";
             return;
         }
-        if (step && !ins.endsWith("step\n")) {
-            stdin += ins;
+        if (step) {
+            let news = (ins.split("step\n")[1] || ins).trim();
+            if (news !== "") {
+                news.split("\n").forEach(s => {
+                    if (!isTrimPrompt(s.trim()) && s.trim() !== "step" && s.trim() !== "") {
+                        stdin += s.trim() + "\n";
+                    }
+                });
+            }
         }
-        if (backtrace && ins.startsWith("--> ")) {
-            const stack = ins
+        if (backtrace && ins.split("\n").some(s => s.trim().startsWith("--> "))) {
+            let backtraces = "";
+            let inBacktraces = false;
+            ins.split("\n").forEach(s => {
+                if (s.startsWith("--> ")) {
+                    inBacktraces = true;
+                }
+                if (inBacktraces) {
+                    backtraces += s + "\n";
+                }
+            });
+            const stack = backtraces
                   .trim().split("\n")
                   .map(s => {
                       const parts = s.substr(4).trim().split(" ");
-                      const linenum = parseInt(parts[4].reverse().split(":")[0].reverse()) - 5;
+                      const linenum = parseInt(s.trim().reverse().split(":")[0].reverse()) - 5;
                       const name = parts[2];
                       let fname;
                       if (name === "<main>") {
@@ -158,9 +214,19 @@ const START = (res, steps = 1) => {
             resolve({ stack, vars: fullVars });
             return;
         }
-        if (json && ins.startsWith("=> ")) {
+        if (json && ins.split("\n").some(s => s.trim().startsWith("=> "))) {
             json = false;
-            const vars = JSON.parse(JSON.parse(ins.substr(2).trim()));
+            let jsons = "";
+            let inJsons = false;
+            ins.split("\n").forEach(s => {
+                if (s.startsWith("=> ")) {
+                    jsons += s.substr(3);
+                    inJsons = true;
+                } else if (inJsons) {
+                    jsons += s;
+                }
+            });
+            const vars = JSON.parse(JSON.parse(jsons));
             Object.keys(vars).forEach(k => {
                 if (vars[k] === null) { return; }
                 fullVars[k] = vars[k];
@@ -169,10 +235,11 @@ const START = (res, steps = 1) => {
             proc.stdin.write("backtrace\n");
             return;
         }
-        if (localVars && ins.startsWith("=> ")) {
+        if (localVars && ins.split("=> ").length === 2) {
             localVars = false;
             const vars = ins
-                  .substr(2).trim()
+                  .split("=> ")[1]
+                  .trim()
                   .substr(1)
                   .reverse().substr(1).reverse()
                   .split(",")
@@ -187,12 +254,12 @@ const START = (res, steps = 1) => {
             proc.stdin.write(cmd);
             return;
         }
-        if (required && ins.startsWith("=> ")) {
+        if (required && ins.split("\n").some(s => s.trim().startsWith("=> "))) {
             required = false;
             stdin = "";
             const loop = (count, done) => {
                 if (!count) {
-                    return done();
+                    return setTimeout(done, 100);
                 }
                 if (!CURR) {
                     res.setHeader('Content-Type', 'application/json');
@@ -204,7 +271,7 @@ const START = (res, steps = 1) => {
                     loop(count - 1, done);
                 });
             };
-            loop(steps - 1, () => STEP(res));
+            loop(steps - 1, () => STEP(req, res));
             return;
         }
         if (!started && ins.trim() === '[1] pry(main)>') {
@@ -213,6 +280,22 @@ const START = (res, steps = 1) => {
             proc.stdin.write("require \"json\"\n");
             return;
         }
+    };
+    proc.stdout.on("data", data => {
+        const ins = data.toString("utf-8").replace(
+            /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
+            ''
+        );
+        ins.split("\n").forEach(s => {
+            if (isPrompt(s)) {
+                PROC(sofar);
+                PROC(s);
+                sofar = "";
+            }
+            else {
+                sofar += s + "\n";
+            }
+        });
     });
     proc.on('close', () => {
         resolve({ stdin, done: true });
@@ -225,13 +308,13 @@ app.get('/reset', (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ success: true }));
 });
-app.get('/step', (req, res) => STEP(res));
+app.get('/step', (req, res) => STEP(req, res));
 app.get('/start', (req, res) => {
-    if (CURR) { return STEP(res); }
-    return START(res);
+    if (CURR) { CURR = undefined; }
+    return START(req, res);
 });
 app.get('/rewind', (req, res) => {
-    if (CURR) { return START(res, CURR.steps - 1); }
+    if (CURR) { return START(req, res, CURR.steps - 1, CURR.codeId); }
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ error: "NOT STARTED" }));
     return {};
